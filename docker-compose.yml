@@ -1,0 +1,42 @@
+services:
+  # The application container: builds from the existing Dockerfile and talks
+  # to the db service over the internal Compose network (hostname "db").
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+    depends_on:
+      db:
+        # Wait for MySQL to actually accept connections, not just for the
+        # container process to start - avoids the app failing on startup
+        # because MySQL is still initializing.
+        condition: service_healthy
+
+  # The MySQL database. Data lives in a named volume, so it survives
+  # "docker compose down" / container restarts (a plain container filesystem
+  # would be wiped every time the container is recreated).
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: balancr
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    ports:
+      - "3306:3306"
+    volumes:
+      - balancr-db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+volumes:
+  # Named volume managed by Docker (not a bind mount) - persists independently
+  # of the db container's lifecycle.
+  balancr-db-data:
