@@ -6,25 +6,39 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel an older, still-running pipeline for the same branch/PR when a
+# newer commit lands, instead of letting both run to completion.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
+
+env:
+  IMAGE_NAME: rubenw0/balancr-api
+  MYSQL_DATABASE: balancr
+  MYSQL_USER: balancr_user
+  MYSQL_PASSWORD: balancr_pass
+  MYSQL_ROOT_PASSWORD: root_pass
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     services:
       mysql:
         image: mysql:8.4
         env:
-          MYSQL_DATABASE: balancr
-          MYSQL_USER: balancr_user
-          MYSQL_PASSWORD: balancr_pass
-          MYSQL_ROOT_PASSWORD: root_pass
+          MYSQL_DATABASE: ${{ env.MYSQL_DATABASE }}
+          MYSQL_USER: ${{ env.MYSQL_USER }}
+          MYSQL_PASSWORD: ${{ env.MYSQL_PASSWORD }}
+          MYSQL_ROOT_PASSWORD: ${{ env.MYSQL_ROOT_PASSWORD }}
         ports:
           - 3306:3306
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot_pass"
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -p${{ env.MYSQL_ROOT_PASSWORD }}"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
@@ -42,15 +56,15 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Run tests
+      # One Gradle invocation instead of two - avoids paying JVM/Gradle
+      # startup cost twice. bootJar doesn't depend on test, so it's safe to
+      # run in the same call.
+      - name: Run tests and build jar
         env:
-          SPRING_DATASOURCE_URL: jdbc:mysql://127.0.0.1:3306/balancr
-          DB_USERNAME: balancr_user
-          DB_PASSWORD: balancr_pass
-        run: ./gradlew test --no-daemon
-
-      - name: Build jar
-        run: ./gradlew bootJar -x test --no-daemon
+          SPRING_DATASOURCE_URL: jdbc:mysql://127.0.0.1:3306/${{ env.MYSQL_DATABASE }}
+          DB_USERNAME: ${{ env.MYSQL_USER }}
+          DB_PASSWORD: ${{ env.MYSQL_PASSWORD }}
+        run: ./gradlew test bootJar --no-daemon
 
       - name: Upload test results
         if: always()
@@ -63,6 +77,26 @@ jobs:
     needs: build-and-test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # The smoke-test step below runs the built image against a real MySQL,
+    # the same way build-and-test does for the source code - this time to
+    # verify the *container* actually boots, not just the jar.
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: ${{ env.MYSQL_DATABASE }}
+          MYSQL_USER: ${{ env.MYSQL_USER }}
+          MYSQL_PASSWORD: ${{ env.MYSQL_PASSWORD }}
+          MYSQL_ROOT_PASSWORD: ${{ env.MYSQL_ROOT_PASSWORD }}
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -p${{ env.MYSQL_ROOT_PASSWORD }}"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
 
     steps:
       - name: Checkout
@@ -71,19 +105,62 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Builds the image once, already tagged with its final names, and
+      # loads it into the local Docker daemon without pushing yet - it
+      # needs to prove it actually works first.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Runs the freshly built image as a real container against the MySQL
+      # service above, then polls it until it responds to an HTTP request.
+      # If the container crashes on startup (bad JDK, missing file, broken
+      # DB config, ...) it will never respond and this step fails loudly,
+      # before anything gets pushed to Docker Hub.
+      - name: Smoke test the built image
+        run: |
+          docker run -d --name balancr-smoke-test \
+            --network host \
+            -e SPRING_DATASOURCE_URL=jdbc:mysql://127.0.0.1:3306/${{ env.MYSQL_DATABASE }} \
+            -e DB_USERNAME=${{ env.MYSQL_USER }} \
+            -e DB_PASSWORD=${{ env.MYSQL_PASSWORD }} \
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+          echo "Waiting for the container to respond on port 8080..."
+          for i in $(seq 1 30); do
+            status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/tasks || echo "000")
+            if [ "$status" != "000" ]; then
+              echo "Container responded with HTTP $status - smoke test passed."
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "Container never responded within 60s - smoke test failed."
+          docker logs balancr-smoke-test
+          exit 1
+
+      - name: Clean up smoke test container
+        if: always()
+        run: docker rm -f balancr-smoke-test || true
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: |
-            rubenw0/balancr-api:latest
-            rubenw0/balancr-api:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      # The image was already built and smoke-tested above - just push the
+      # exact same local image instead of building it again.
+      - name: Push image
+        run: |
+          docker push ${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
