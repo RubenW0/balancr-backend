@@ -37,8 +37,11 @@ jobs:
           MYSQL_ROOT_PASSWORD: ${{ env.MYSQL_ROOT_PASSWORD }}
         ports:
           - 3306:3306
+        # The env context isn't available here (GitHub Actions limitation on
+        # services.*.options), so this must be kept in sync with
+        # MYSQL_ROOT_PASSWORD above by hand.
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -p${{ env.MYSQL_ROOT_PASSWORD }}"
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot_pass"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
@@ -92,8 +95,11 @@ jobs:
           MYSQL_ROOT_PASSWORD: ${{ env.MYSQL_ROOT_PASSWORD }}
         ports:
           - 3306:3306
+        # The env context isn't available here (GitHub Actions limitation on
+        # services.*.options), so this must be kept in sync with
+        # MYSQL_ROOT_PASSWORD above by hand.
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -p${{ env.MYSQL_ROOT_PASSWORD }}"
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot_pass"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
