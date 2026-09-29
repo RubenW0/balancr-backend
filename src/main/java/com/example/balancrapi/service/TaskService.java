@@ -32,7 +32,7 @@ public class TaskService {
 
     public Task updateTask(Long id, Task updatedTask) {
         Task existing = getTaskById(id);
-        existing.setTitle(updatedTask.getLongTitle());
+        existing.setTitle(updatedTask.getTitle());
         existing.setCompleted(updatedTask.isCompleted());
         return taskRepository.save(existing);
     }

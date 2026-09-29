@@ -84,7 +84,7 @@ class TaskServiceTest {
 
         Task result = taskService.updateTask(1L, updates);
 
-        assertThat(result.getLongTitle()).isEqualTo("New title");
+        assertThat(result.getTitle()).isEqualTo("New title");
         assertThat(result.isCompleted()).isTrue();
         verify(taskRepository).save(existing);
     }

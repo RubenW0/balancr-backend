@@ -32,7 +32,7 @@ public class Task {
         this.id = id;
     }
 
-    public String getLongTitle() {
+    public String getTitle() {
         return title;
     }
 

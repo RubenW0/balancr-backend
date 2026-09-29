@@ -16,15 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
-/**
- * REST endpoints for FixedEvents. Contains no business logic itself - it only
- * validates the incoming request shape (@Valid) and delegates to
- * FixedEventService, translating the result into an HTTP response.
- * <p>
- * The authenticated user is taken from @AuthenticationPrincipal; who is
- * allowed to call these endpoints (role checks, authentication itself) is
- * configured separately in the Spring Security layer.
- */
+
 @RestController
 @RequestMapping("/api/fixed-events")
 public class FixedEventController {
